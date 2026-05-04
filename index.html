@@ -19,9 +19,12 @@
         .search-results { position: absolute; top: calc(100% + 6px); left: 20px; right: 20px; background: #141414; border: 1px solid #2f2f2f; border-radius: 8px; max-height: 320px; overflow-y: auto; display: none; z-index: 50; }
         .search-results.active { display: block; }
         .search-item { padding: 10px 12px; border-bottom: 1px solid #242424; cursor: pointer; }
+        .search-item.is-active { background: #1e2a32; }
         .search-item:last-child { border-bottom: none; }
         .search-title { color: #dce7ee; font-size: 13px; font-weight: 600; }
         .search-preview { color: #9aa6b2; font-size: 12px; margin-top: 4px; }
+        .search-highlight { color: #f6fffb; background: rgba(0, 182, 199, 0.22); border-radius: 3px; padding: 0 2px; }
+        .content-highlight { background: rgba(255, 214, 102, 0.35); border-radius: 3px; padding: 0 2px; }
         .nav-links { flex: 1; overflow-y: auto; padding: 10px 0; }
         .nav-item { padding: 10px 20px; cursor: pointer; border-left: 4px solid transparent; transition: 0.2s; color: #ccc; }
         .nav-item:hover { background: #333; color: #fff; }
@@ -113,6 +116,89 @@
                 .trim();
         }
 
+        function escapeRegExp(value) {
+            return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        function highlightMatch(text, query) {
+            if (!query) {
+                return escapeHtml(text);
+            }
+            const escaped = escapeRegExp(query);
+            const regex = new RegExp(escaped, 'gi');
+            return escapeHtml(text).replace(regex, (match) => `<span class="search-highlight">${match}</span>`);
+        }
+
+        function clearContentHighlights(container) {
+            const highlights = Array.from(container.querySelectorAll('.content-highlight'));
+            highlights.forEach((node) => {
+                const parent = node.parentNode;
+                if (!parent) {
+                    return;
+                }
+                parent.replaceChild(document.createTextNode(node.textContent || ''), node);
+                parent.normalize();
+            });
+        }
+
+        function applyContentHighlights(container, query) {
+            if (!query || query.length < 2) {
+                return;
+            }
+            const regex = new RegExp(escapeRegExp(query), 'gi');
+            const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+                acceptNode: (node) => {
+                    if (!node.nodeValue || !node.nodeValue.trim()) {
+                        return NodeFilter.FILTER_REJECT;
+                    }
+                    const parent = node.parentElement;
+                    if (!parent) {
+                        return NodeFilter.FILTER_REJECT;
+                    }
+                    if (parent.closest('.search-results')) {
+                        return NodeFilter.FILTER_REJECT;
+                    }
+                    if (parent.tagName === 'SCRIPT' || parent.tagName === 'STYLE') {
+                        return NodeFilter.FILTER_REJECT;
+                    }
+                    return NodeFilter.FILTER_ACCEPT;
+                },
+            });
+
+            const nodes = [];
+            let current = walker.nextNode();
+            while (current) {
+                if (regex.test(current.nodeValue)) {
+                    nodes.push(current);
+                }
+                current = walker.nextNode();
+            }
+
+            nodes.forEach((node) => {
+                const text = node.nodeValue;
+                if (!text) {
+                    return;
+                }
+                const fragment = document.createDocumentFragment();
+                let lastIndex = 0;
+                text.replace(regex, (match, offset) => {
+                    if (offset > lastIndex) {
+                        fragment.appendChild(document.createTextNode(text.slice(lastIndex, offset)));
+                    }
+                    const span = document.createElement('span');
+                    span.className = 'content-highlight';
+                    span.textContent = match;
+                    fragment.appendChild(span);
+                    lastIndex = offset + match.length;
+                    return match;
+                });
+                if (lastIndex < text.length) {
+                    fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
+                }
+                node.parentNode.replaceChild(fragment, node);
+            });
+        }
+
         function buildSearchIndex(container) {
             const nodes = Array.from(container.querySelectorAll('h2, h3, h4, p, li'));
             const index = [];
@@ -142,7 +228,7 @@
             return index;
         }
 
-        function renderSearchResults(results, container) {
+        function renderSearchResults(results, container, query) {
             if (!container) {
                 return;
             }
@@ -157,8 +243,8 @@
                     const preview = result.text.length > 120 ? `${result.text.slice(0, 120)}…` : result.text;
                     return `
                         <div class="search-item" data-target="${result.id}">
-                            <div class="search-title">${escapeHtml(result.title)}</div>
-                            <div class="search-preview">${escapeHtml(preview)}</div>
+                            <div class="search-title">${highlightMatch(result.title, query)}</div>
+                            <div class="search-preview">${highlightMatch(preview, query)}</div>
                         </div>
                     `;
                 })
@@ -175,14 +261,39 @@
             }
 
             const index = buildSearchIndex(container);
+            let activeIndex = -1;
+
+            const getItems = () => Array.from(results.querySelectorAll('.search-item'));
+
+            const setActive = (nextIndex) => {
+                const items = getItems();
+                if (items.length === 0) {
+                    activeIndex = -1;
+                    return;
+                }
+                activeIndex = Math.max(0, Math.min(nextIndex, items.length - 1));
+                items.forEach((item, idx) => {
+                    if (idx === activeIndex) {
+                        item.classList.add('is-active');
+                        item.scrollIntoView({ block: 'nearest' });
+                    } else {
+                        item.classList.remove('is-active');
+                    }
+                });
+            };
 
             const runSearch = () => {
                 const query = normalizeSearchText(input.value || '');
                 if (!query || query.length < 2) {
                     results.classList.remove('active');
                     results.innerHTML = '';
+                    activeIndex = -1;
+                    clearContentHighlights(container);
                     return;
                 }
+
+                clearContentHighlights(container);
+                applyContentHighlights(container, query);
 
                 const matches = index
                     .map((entry) => {
@@ -190,10 +301,11 @@
                         if (position === -1) {
                             return null;
                         }
-                        const boost = entry.tag === 'H2' ? 3 : entry.tag === 'H3' ? 2 : entry.tag === 'H4' ? 1 : 0;
+                        const boost = entry.tag === 'H2' ? 4 : entry.tag === 'H3' ? 3 : entry.tag === 'H4' ? 2 : 0;
+                        const penalty = entry.tag === 'P' || entry.tag === 'LI' ? 12 : 0;
                         return {
                             ...entry,
-                            score: 100 - position + boost * 10,
+                            score: 100 - position + boost * 12 - penalty,
                             title: entry.tag.startsWith('H') ? entry.text : `İçerik: ${entry.text.slice(0, 60)}`,
                         };
                     })
@@ -201,8 +313,9 @@
                     .sort((a, b) => b.score - a.score)
                     .slice(0, 12);
 
-                renderSearchResults(matches, results);
+                renderSearchResults(matches, results, query);
                 results.classList.add('active');
+                setActive(0);
             };
 
             const scrollToTarget = (target) => {
@@ -243,6 +356,7 @@
                 const target = document.getElementById(targetId);
                 scrollToTarget(target);
                 results.classList.remove('active');
+                activeIndex = -1;
             };
 
             button.addEventListener('click', runSearch);
@@ -250,10 +364,25 @@
             input.addEventListener('keydown', (event) => {
                 if (event.key === 'Enter') {
                     event.preventDefault();
-                    runSearch();
+                    const items = getItems();
+                    if (items.length > 0 && activeIndex >= 0) {
+                        items[activeIndex].click();
+                    } else {
+                        runSearch();
+                    }
+                }
+                if (event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    setActive(activeIndex + 1);
+                }
+                if (event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    setActive(activeIndex - 1);
                 }
                 if (event.key === 'Escape') {
                     results.classList.remove('active');
+                    activeIndex = -1;
+                    clearContentHighlights(container);
                 }
             });
             results.addEventListener('click', onPick);
