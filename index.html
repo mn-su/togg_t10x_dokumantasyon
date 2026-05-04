@@ -10,8 +10,18 @@
         body { font-family: 'Segoe UI', sans-serif; margin: 0; padding: 0; background: var(--bg); color: var(--text); line-height: 1.6; display: flex; height: 100vh; overflow: hidden; }
         
         .sidebar { width: 320px; background: var(--sidebar-bg); color: #fff; display: flex; flex-direction: column; border-right: 1px solid #333; flex-shrink: 0; }
-        .header { padding: 20px; border-bottom: 1px solid #333; background: #000; }
+        .header { padding: 20px; border-bottom: 1px solid #333; background: #000; position: relative; display: flex; flex-direction: column; gap: 10px; }
         .header h1 { margin: 0; color: var(--togg-blue); font-size: 20px; }
+        .search-box { display: flex; gap: 8px; align-items: center; }
+        .search-input { flex: 1; padding: 8px 10px; border: 1px solid #3a3a3a; border-radius: 6px; background: #111; color: #fff; font-size: 13px; outline: none; }
+        .search-input:focus { border-color: var(--togg-blue); box-shadow: 0 0 0 2px rgba(0, 182, 199, 0.2); }
+        .search-button { padding: 8px 12px; border: none; border-radius: 6px; background: var(--togg-blue); color: #001317; font-size: 12px; font-weight: 700; cursor: pointer; }
+        .search-results { position: absolute; top: calc(100% + 6px); left: 20px; right: 20px; background: #141414; border: 1px solid #2f2f2f; border-radius: 8px; max-height: 320px; overflow-y: auto; display: none; z-index: 50; }
+        .search-results.active { display: block; }
+        .search-item { padding: 10px 12px; border-bottom: 1px solid #242424; cursor: pointer; }
+        .search-item:last-child { border-bottom: none; }
+        .search-title { color: #dce7ee; font-size: 13px; font-weight: 600; }
+        .search-preview { color: #9aa6b2; font-size: 12px; margin-top: 4px; }
         .nav-links { flex: 1; overflow-y: auto; padding: 10px 0; }
         .nav-item { padding: 10px 20px; cursor: pointer; border-left: 4px solid transparent; transition: 0.2s; color: #ccc; }
         .nav-item:hover { background: #333; color: #fff; }
@@ -94,6 +104,164 @@
 
         function scrollToPage(pageNum) {
             scrollToSection('page-' + pageNum);
+        }
+
+        function normalizeSearchText(value) {
+            return normalizeElementText(value)
+                .toLocaleLowerCase('tr-TR')
+                .replace(/\s+/g, ' ')
+                .trim();
+        }
+
+        function buildSearchIndex(container) {
+            const nodes = Array.from(container.querySelectorAll('h2, h3, h4, p, li'));
+            const index = [];
+
+            nodes.forEach((node, idx) => {
+                if (node.closest('.index-section') || node.closest('.abbr-section')) {
+                    return;
+                }
+
+                const text = normalizeElementText(node.textContent);
+                if (!text || text.length < 8) {
+                    return;
+                }
+
+                if (!node.id) {
+                    node.id = `search-target-${idx + 1}`;
+                }
+
+                index.push({
+                    id: node.id,
+                    tag: node.tagName,
+                    text,
+                    normalized: normalizeSearchText(text),
+                });
+            });
+
+            return index;
+        }
+
+        function renderSearchResults(results, container) {
+            if (!container) {
+                return;
+            }
+
+            if (results.length === 0) {
+                container.innerHTML = '<div class="search-item"><div class="search-preview">Sonuç bulunamadı</div></div>';
+                return;
+            }
+
+            container.innerHTML = results
+                .map((result) => {
+                    const preview = result.text.length > 120 ? `${result.text.slice(0, 120)}…` : result.text;
+                    return `
+                        <div class="search-item" data-target="${result.id}">
+                            <div class="search-title">${escapeHtml(result.title)}</div>
+                            <div class="search-preview">${escapeHtml(preview)}</div>
+                        </div>
+                    `;
+                })
+                .join('');
+        }
+
+        function activateSearch(container) {
+            const scrollHost = document.querySelector('.main-content');
+            const input = document.getElementById('searchInput');
+            const button = document.getElementById('searchButton');
+            const results = document.getElementById('searchResults');
+            if (!input || !button || !results || !container || !scrollHost) {
+                return;
+            }
+
+            const index = buildSearchIndex(container);
+
+            const runSearch = () => {
+                const query = normalizeSearchText(input.value || '');
+                if (!query || query.length < 2) {
+                    results.classList.remove('active');
+                    results.innerHTML = '';
+                    return;
+                }
+
+                const matches = index
+                    .map((entry) => {
+                        const position = entry.normalized.indexOf(query);
+                        if (position === -1) {
+                            return null;
+                        }
+                        const boost = entry.tag === 'H2' ? 3 : entry.tag === 'H3' ? 2 : entry.tag === 'H4' ? 1 : 0;
+                        return {
+                            ...entry,
+                            score: 100 - position + boost * 10,
+                            title: entry.tag.startsWith('H') ? entry.text : `İçerik: ${entry.text.slice(0, 60)}`,
+                        };
+                    })
+                    .filter(Boolean)
+                    .sort((a, b) => b.score - a.score)
+                    .slice(0, 12);
+
+                renderSearchResults(matches, results);
+                results.classList.add('active');
+            };
+
+            const scrollToTarget = (target) => {
+                if (!target) {
+                    return;
+                }
+
+                let attempts = 0;
+                const maxAttempts = 6;
+
+                const step = () => {
+                    const hostRect = scrollHost.getBoundingClientRect();
+                    const targetRect = target.getBoundingClientRect();
+                    const offset = targetRect.top - hostRect.top;
+                    const top = scrollHost.scrollTop + offset - 12;
+                    scrollHost.scrollTo({ top, behavior: 'instant' });
+
+                    attempts += 1;
+                    if (attempts < maxAttempts && Math.abs(offset) > 6) {
+                        window.requestAnimationFrame(step);
+                    }
+                };
+
+                step();
+                window.setTimeout(step, 120);
+                window.setTimeout(step, 320);
+            };
+
+            const onPick = (event) => {
+                const item = event.target.closest('.search-item');
+                if (!item) {
+                    return;
+                }
+                const targetId = item.dataset.target;
+                if (!targetId) {
+                    return;
+                }
+                const target = document.getElementById(targetId);
+                scrollToTarget(target);
+                results.classList.remove('active');
+            };
+
+            button.addEventListener('click', runSearch);
+            input.addEventListener('input', runSearch);
+            input.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    runSearch();
+                }
+                if (event.key === 'Escape') {
+                    results.classList.remove('active');
+                }
+            });
+            results.addEventListener('click', onPick);
+            document.addEventListener('click', (event) => {
+                if (!event.target.closest('.header')) {
+                    results.classList.remove('active');
+                }
+            });
         }
 
         function escapeHtml(text) {
@@ -1458,6 +1626,7 @@
             normalizeBulletParagraphs(container);
             normalizeTables(container);
             normalizeAbbreviationSection(container);
+            activateSearch(container);
 
             const bindInteractiveLinks = () => {
                 makeIndexClickable(container);
@@ -1478,6 +1647,11 @@
         <div class="header">
             <h1>TOGG T10X</h1>
             <p style="color:#aaa; font-size:12px; margin:0;">Kullanıcı El Kitabı</p>
+            <div class="search-box">
+                <input id="searchInput" class="search-input" type="search" placeholder="Hızlı arama..." autocomplete="off" />
+                <button id="searchButton" class="search-button" type="button">Ara</button>
+            </div>
+            <div id="searchResults" class="search-results" aria-live="polite"></div>
         </div>
         <div class="nav-links">
         <div class="nav-item" style="padding-left: 20px; font-weight: 600; font-size: 14px; color: #fff;" 
