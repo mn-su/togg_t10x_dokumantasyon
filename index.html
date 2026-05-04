@@ -92,13 +92,46 @@
         }
     </style>
     <script>
+        function scrollToTargetElement(target, options = {}) {
+            if (!target) {
+                return;
+            }
+
+            const scrollHost = document.querySelector('.main-content');
+            if (!scrollHost) {
+                target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                return;
+            }
+
+            let attempts = 0;
+            const maxAttempts = options.maxAttempts || 6;
+            const offsetPadding = typeof options.offsetPadding === 'number' ? options.offsetPadding : 12;
+
+            const step = () => {
+                const hostRect = scrollHost.getBoundingClientRect();
+                const targetRect = target.getBoundingClientRect();
+                const offset = targetRect.top - hostRect.top;
+                const top = scrollHost.scrollTop + offset - offsetPadding;
+                scrollHost.scrollTo({ top, behavior: 'instant' });
+
+                attempts += 1;
+                if (attempts < maxAttempts && Math.abs(offset) > 6) {
+                    window.requestAnimationFrame(step);
+                }
+            };
+
+            step();
+            window.setTimeout(step, 120);
+            window.setTimeout(step, 320);
+        }
+
         function scrollToSection(targetId, navItem) {
             const target = document.getElementById(targetId);
             if (!target) {
                 return;
             }
 
-            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            scrollToTargetElement(target);
             document.querySelectorAll('.nav-item').forEach((item) => item.classList.remove('active'));
             if (navItem) {
                 navItem.classList.add('active');
@@ -318,32 +351,6 @@
                 setActive(0);
             };
 
-            const scrollToTarget = (target) => {
-                if (!target) {
-                    return;
-                }
-
-                let attempts = 0;
-                const maxAttempts = 6;
-
-                const step = () => {
-                    const hostRect = scrollHost.getBoundingClientRect();
-                    const targetRect = target.getBoundingClientRect();
-                    const offset = targetRect.top - hostRect.top;
-                    const top = scrollHost.scrollTop + offset - 12;
-                    scrollHost.scrollTo({ top, behavior: 'instant' });
-
-                    attempts += 1;
-                    if (attempts < maxAttempts && Math.abs(offset) > 6) {
-                        window.requestAnimationFrame(step);
-                    }
-                };
-
-                step();
-                window.setTimeout(step, 120);
-                window.setTimeout(step, 320);
-            };
-
             const onPick = (event) => {
                 const item = event.target.closest('.search-item');
                 if (!item) {
@@ -354,7 +361,7 @@
                     return;
                 }
                 const target = document.getElementById(targetId);
-                scrollToTarget(target);
+                scrollToTargetElement(target);
                 results.classList.remove('active');
                 activeIndex = -1;
             };
